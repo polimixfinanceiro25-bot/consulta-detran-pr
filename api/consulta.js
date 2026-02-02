@@ -1,10 +1,10 @@
-/* ARQUIVO: api/consulta.js (VERSÃO CORRETA - URL HOME) */
+/* ARQUIVO: api/consulta.js (VERSÃO COM ID DESCOBERTO) */
 const axios = require('axios');
 const cheerio = require('cheerio');
 const qs = require('qs');
 
 module.exports = async (req, res) => {
-    // Configurações de Segurança
+    // 1. Configurações e Segurança
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -16,10 +16,9 @@ module.exports = async (req, res) => {
     if (!renavam) return res.status(400).json({ erro: 'Renavam vazio.' });
 
     try {
-        // AGORA SIM: A URL CORRETA DA "PORTARIA"
         const urlHome = 'https://www.contribuinte.fazenda.pr.gov.br/ipva/faces/home';
 
-        // 1. Acessa a Home para iniciar a sessão
+        // 2. Acessa a Home (Portaria)
         const page = await axios.get(urlHome);
         const html = page.data;
         const $ = cheerio.load(html);
@@ -28,35 +27,36 @@ module.exports = async (req, res) => {
         const cookieHeader = cookies ? cookies.map(c => c.split(';')[0]).join('; ') : '';
         const viewState = $('input[name="javax.faces.ViewState"]').val();
 
-        // 2. RASTREADOR DE IDs NA HOME
-        
-        // Procura o ID do campo Renavam
-        let idInputRenavam = '';
-        $('label').each((i, el) => {
-            if ($(el).text().includes('Renavam')) idInputRenavam = $(el).attr('for');
-        });
-        if (!idInputRenavam) idInputRenavam = 'pt1:r1:0:it1'; // Padrão comum do Detran-PR
+        // --- AQUI ESTÁ A CORREÇÃO ---
+        // Usamos o ID exato que você descobriu na foto
+        const idInputRenavam = 'pt1:r1:0:r2:0:ig1:it1';
 
-        // Procura o ID do Botão Consultar
+        // --- CAÇADOR DE BOTÃO ---
+        // Como não temos a foto do botão, usamos a busca por texto "CONSULTAR"
         let idBotaoConsultar = '';
-        $('*').each((i, el) => {
-            if (el.tagName === 'script' || el.tagName === 'style') return;
-            const texto = $(el).text() || $(el).attr('value') || $(el).attr('title') || '';
-            const id = $(el).attr('id');
-
-            // Procura botão que tenha "Consultar" no texto
-            if (id && (texto.includes('Consultar') || texto.includes('Pesquisar'))) {
-                 // Evita pegar links de menu, foca no botão do formulário
-                 if (el.tagName === 'button' || el.tagName === 'a' || $(el).attr('role') === 'button') {
-                     idBotaoConsultar = id;
-                 }
+        
+        // Procura em todos os elementos visíveis
+        $('a, button, div, span, input').each((i, el) => {
+            const texto = $(el).text() ? $(el).text().toUpperCase() : ($(el).val() ? $(el).val().toUpperCase() : '');
+            
+            // Se achar "CONSULTAR" e tiver um ID, é esse o cara!
+            if (texto.includes('CONSULTAR') || texto.includes('PESQUISAR')) {
+                const id = $(el).attr('id');
+                if (id) {
+                    idBotaoConsultar = id;
+                    return false; // Para de procurar
+                }
             }
         });
 
-        // Se não achar, usa o chute educado (baseado na estrutura do seu print anterior)
-        if (!idBotaoConsultar) idBotaoConsultar = 'pt1:r1:0:cb1'; 
+        // Se a busca falhar, tenta um "chute" baseado no padrão do ID do Renavam
+        // (Geralmente o botão está perto do input na hierarquia 'ig1')
+        if (!idBotaoConsultar) {
+             // Chute educado: pt1:r1:0:r2:0:ig1:b1 (ou cb1)
+             idBotaoConsultar = 'pt1:r1:0:r2:0:ig1:cb1';
+        }
 
-        // 3. Disparo (POST para a própria Home)
+        // 3. Disparo (POST)
         const form = {
             'org.apache.myfaces.trinidad.faces.FORM': 'f1',
             'javax.faces.ViewState': viewState,
@@ -74,18 +74,17 @@ module.exports = async (req, res) => {
             }
         });
 
-        // 4. Extração
+        // 4. Extração dos Dados
         const $res = cheerio.load(result.data);
         const clean = (sel) => $res(sel).text().replace(/CDATA\[|\]\]/g, '').trim();
 
-        // Tenta achar o proprietário para confirmar sucesso
+        // Verifica se achou o proprietário
         const proprietario = clean('[id$=":ot2"]');
 
         if (!proprietario) {
-            // Debug avançado se falhar
             return res.status(404).json({
-                erro: 'Não achei os dados.',
-                pista: `URL usada: ${urlHome}. Botão: ${idBotaoConsultar}. Input: ${idInputRenavam}`
+                erro: 'Não encontrei. O ID do Renavam eu usei certo, mas talvez errei o botão.',
+                pista: `Botão que cliquei: ${idBotaoConsultar}. Input usado: ${idInputRenavam}`
             });
         }
 
