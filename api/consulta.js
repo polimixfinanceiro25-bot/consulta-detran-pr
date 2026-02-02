@@ -1,4 +1,4 @@
-/* ARQUIVO: api/consulta.js (VERSÃO FINAL 2026 - CORREÇÃO LIBNSS3) */
+/* ARQUIVO: api/consulta.js (VERSÃO PARAQUEDAS - DOWNLOAD REMOTO) */
 const chromium = require('@sparticuz/chromium');
 const puppeteer = require('puppeteer-core');
 
@@ -17,12 +17,15 @@ module.exports = async (req, res) => {
     let browser = null;
 
     try {
-        // 1. CONFIGURAÇÃO DE LIGAR O ROBÔ (MODERNO)
-        // Usamos a versão 131 que corrige o erro de libnss3 automaticamente
+        // --- CONFIGURAÇÃO DE DOWNLOAD REMOTO (A SOLUÇÃO DO LIBNSS3) ---
+        // Aqui nós forçamos ele a baixar um Chrome específico que funciona no Linux da Vercel
+        const linkDoChrome = "https://github.com/Sparticuz/chromium/releases/download/v123.0.1/chromium-v123.0.1-pack.tar";
+        
         browser = await puppeteer.launch({
-            args: [...chromium.args, '--hide-scrollbars', '--disable-web-security'],
+            args: [...chromium.args, '--hide-scrollbars', '--disable-web-security', '--no-sandbox'],
             defaultViewport: chromium.defaultViewport,
-            executablePath: await chromium.executablePath(), // Agora é uma função!
+            // O Segredo: Passamos o link para ele baixar na hora
+            executablePath: await chromium.executablePath(linkDoChrome),
             headless: chromium.headless,
             ignoreHTTPSErrors: true
         });
@@ -31,7 +34,7 @@ module.exports = async (req, res) => {
         
         // 2. Entra no site
         const urlHome = 'https://www.contribuinte.fazenda.pr.gov.br/ipva/faces/home';
-        await page.goto(urlHome, { waitUntil: 'networkidle2', timeout: 25000 });
+        await page.goto(urlHome, { waitUntil: 'networkidle2', timeout: 30000 });
 
         // 3. Digita o Renavam (SELETOR DO SEU CÓDIGO LOCAL)
         const inputRenavam = 'input[id*="ig1:it1::content"]'; 
@@ -39,36 +42,37 @@ module.exports = async (req, res) => {
         await page.type(inputRenavam, renavam);
 
         // 4. Clica no botão Consultar (SELETOR DO SEU CÓDIGO LOCAL)
+        // O seu código local usava "ig1:b11", vamos priorizar ele
         let botaoConsultar = 'div[id*="ig1:b11"]';
         
-        // Verifica se o botão existe antes de clicar
+        // Se não achar o b11, tenta o b1
         if ((await page.$(botaoConsultar)) === null) {
-             botaoConsultar = 'div[id*="ig1:b1"]'; // Plano B
+             botaoConsultar = 'div[id*="ig1:b1"]';
         }
         
-        // Clique robusto (via Javascript) para garantir que o Detran aceite
+        // Clique via Javascript (mais seguro contra falhas de renderização)
         await page.evaluate((btnSelector) => {
             const btn = document.querySelector(btnSelector);
             if (btn) btn.click();
         }, botaoConsultar);
 
         // 5. ESPERA INTELIGENTE
-        // Espera aparecer o nome do proprietário ou qualquer dado
+        // Espera o nome do proprietário aparecer
         try {
             await page.waitForFunction(
                 () => {
                     const el = document.querySelector('span[id*="ot2"]');
                     return el && el.innerText.length > 3;
                 },
-                { timeout: 20000 } 
+                { timeout: 25000 } 
             );
         } catch (e) {
-            // Se der erro de tempo, pegamos o texto da tela para saber o motivo (ex: Captcha)
+            // Se der erro, tira print do texto da tela
             const textoTela = await page.evaluate(() => document.body.innerText.substring(0, 400));
-            throw new Error(`O site demorou para responder. Pode ser Captcha ou lentidão. Texto na tela: ${textoTela}`);
+            throw new Error(`Tempo esgotado. Texto na tela: ${textoTela}`);
         }
 
-        // 6. Raspa os dados (Exatamente como no seu local)
+        // 6. Raspa os dados
         const dados = await page.evaluate(() => {
             const pegarTexto = (parteDoId) => {
                 const el = document.querySelector(`span[id*="${parteDoId}"]`);
@@ -85,7 +89,6 @@ module.exports = async (req, res) => {
             };
         });
 
-        // Pega os valores (R$)
         const valores = await page.evaluate(() => {
             return Array.from(document.querySelectorAll('span'))
                 .map(s => s.innerText)
