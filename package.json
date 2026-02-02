@@ -1,10 +1,10 @@
 {
   "name": "consulta-detran-pr",
   "version": "1.0.0",
-  "description": "API Detran PR Blindada",
+  "description": "API Detran PR Versao Final 2026",
   "main": "api/consulta.js",
   "dependencies": {
-    "chrome-aws-lambda": "10.1.0",
-    "puppeteer-core": "10.4.0"
+    "puppeteer-core": "^24.0.0",
+    "@sparticuz/chromium": "^131.0.1"
   }
 }
