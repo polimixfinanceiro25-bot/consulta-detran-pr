@@ -1,7 +1,7 @@
 {
   "name": "consulta-detran-pr",
   "version": "1.0.0",
-  "description": "API Detran PR Compativel",
+  "description": "API Detran PR Vercel",
   "main": "api/consulta.js",
   "dependencies": {
     "puppeteer-core": "19.7.5",
