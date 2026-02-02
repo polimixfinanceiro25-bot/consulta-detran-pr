@@ -1,11 +1,10 @@
-/* ARQUIVO: api/consulta.js (VERSÃO COM OLHOS - DEBUG TEXTUAL) */
+/* ARQUIVO: api/consulta.js (VERSÃO FINAL - COM REDIRECIONAMENTO) */
 const axios = require('axios');
 const cheerio = require('cheerio');
 const qs = require('qs');
-// Importa o suporte a cookies para não perder a sessão no redirect
-// (Se der erro de módulo, vamos usar gestão manual melhorada abaixo)
 
 module.exports = async (req, res) => {
+    // 1. Configurações
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -19,25 +18,24 @@ module.exports = async (req, res) => {
     try {
         const urlHome = 'https://www.contribuinte.fazenda.pr.gov.br/ipva/faces/home';
         
-        // CUIDADO: Axios nativo perde cookies em redirects. Vamos tratar isso.
+        // Cliente Axios customizado para não seguir redirects automaticamente (nós faremos isso manualmente para cuidar dos cookies)
         const client = axios.create({
-            maxRedirects: 0, // Nós mesmos vamos seguir os redirects para segurar o cookie
+            maxRedirects: 0,
             validateStatus: status => status >= 200 && status < 400
         });
 
-        // 1. Acessa Home
+        // --- PASSO 1: Pegar o Crachá (Cookies) na Home ---
         const page = await client.get(urlHome);
         let cookies = page.headers['set-cookie'] || [];
-        let cookieStr = cookies.map(c => c.split(';')[0]).join('; ');
-
+        
         const $ = cheerio.load(page.data);
         const viewState = $('input[name="javax.faces.ViewState"]').val();
 
-        // SEUS IDs DESCOBERTOS (Corretos)
+        // SEUS IDs CORRETOS (CONFIRMADOS NAS FOTOS)
         const idInput = 'pt1:r1:0:r2:0:ig1:it1';
         const idBotao = 'pt1:r1:0:r2:0:ig1:b1';
 
-        // 2. Monta o envio
+        // --- PASSO 2: Enviar a Consulta ---
         const form = {
             'org.apache.myfaces.trinidad.faces.FORM': 'f1',
             'javax.faces.ViewState': viewState,
@@ -46,48 +44,64 @@ module.exports = async (req, res) => {
             [idInput]: renavam
         };
 
-        // 3. Dispara o POST
-        const result = await client.post(urlHome, qs.stringify(form), {
+        // Prepara os cookies para envio
+        const cookieStr = cookies.map(c => c.split(';')[0]).join('; ');
+
+        const postResult = await client.post(urlHome, qs.stringify(form), {
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Cookie': cookieStr, // Envia o crachá
+                'Cookie': cookieStr,
                 'Origin': 'https://www.contribuinte.fazenda.pr.gov.br',
                 'Referer': urlHome
             }
         });
 
-        // 4. Análise do Resultado (Onde o robô caiu?)
-        const $res = cheerio.load(result.data);
-        const proprietario = $res('[id$=":ot2"]').text();
-
-        // === AQUI ESTÁ A MÁGICA DOS "OLHOS" ===
-        if (!proprietario) {
-            // Pega o título e os textos principais da página para saber onde estamos
-            const titulo = $res('title').text().trim();
-            const h1 = $res('h1').text().trim();
-            const mensagensErro = $res('.AFError, .AFWarning, .ui-messages-error-detail').text().trim();
+        // --- PASSO 3: O Pulo do Gato (Entrar na Sala Nova) ---
+        let htmlFinal = postResult.data;
+        
+        // Se o Detran respondeu com "Vá para tal lugar" (Redirect 302 ou 303)
+        if (postResult.status === 302 || postResult.status === 303 || postResult.headers.location) {
+            const novaUrl = postResult.headers.location;
             
-            // Pega um resumo do texto da página (primeiros 300 caracteres úteis)
-            const corpoTexto = $res('body').text().replace(/\s+/g, ' ').substring(0, 300);
+            // Atualiza cookies se vierem novos
+            if (postResult.headers['set-cookie']) {
+                cookies = [...cookies, ...postResult.headers['set-cookie']];
+            }
+            const cookieStrFinal = cookies.map(c => c.split(';')[0]).join('; ');
 
-            return res.status(404).json({
-                erro: 'Não encontrei o veículo.',
-                olhos_do_robo: {
-                    titulo_pagina: titulo,
-                    mensagem_erro_site: mensagensErro || 'Nenhuma mensagem de erro explícita',
-                    onde_estou: corpoTexto,
-                    ids_usados: `Botão: ${idBotao} | Input: ${idInput}`
+            // Segue para a nova página
+            const pageFinal = await client.get(novaUrl, {
+                headers: {
+                    'Cookie': cookieStrFinal,
+                    'Referer': urlHome
                 }
+            });
+            htmlFinal = pageFinal.data;
+        }
+
+        // --- PASSO 4: Ler os Resultados ---
+        const $res = cheerio.load(htmlFinal);
+        const clean = (sel) => $res(sel).text().replace(/CDATA\[|\]\]/g, '').trim();
+
+        const proprietario = clean('[id$=":ot2"]');
+
+        if (!proprietario) {
+            // AGORA O ERRO VAI APARECER COMPLETO
+            // Eu juntei o texto técnico na mensagem principal para o pop-up mostrar
+            const titulo = $res('title').text();
+            const textoPagina = $res('body').text().replace(/\s+/g, ' ').substring(0, 150);
+            
+            return res.status(404).json({
+                erro: `ERRO TÉCNICO: Título da pág: "${titulo}". Texto visível: "${textoPagina}". IDs usados: ${idInput} / ${idBotao}`
             });
         }
 
-        // Se achou, sucesso!
         const dados = {
             proprietario: proprietario,
-            renavam: $res('[id$=":ot6"]').text(),
-            placa: $res('[id$=":ot8"]').text(),
-            modelo: $res('[id$=":ot10"]').text(),
-            ano: $res('[id$=":ot12"]').text(),
+            renavam: clean('[id$=":ot6"]'),
+            placa: clean('[id$=":ot8"]'),
+            modelo: clean('[id$=":ot10"]'),
+            ano: clean('[id$=":ot12"]'),
             debitos: []
         };
         
@@ -99,6 +113,6 @@ module.exports = async (req, res) => {
         res.json(dados);
 
     } catch (e) {
-        res.status(500).json({ erro: 'Erro técnico: ' + e.message });
+        res.status(500).json({ erro: 'FALHA CRÍTICA: ' + e.message });
     }
 };
