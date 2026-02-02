@@ -1,10 +1,9 @@
-/* ARQUIVO: api/consulta.js (VERSÃO FINAL - COM REDIRECIONAMENTO) */
-const axios = require('axios');
-const cheerio = require('cheerio');
-const qs = require('qs');
+/* ARQUIVO: api/consulta.js (VERSÃO PUPPETEER - O ROBÔ QUE USA CHROME) */
+const chromium = require('@sparticuz/chromium');
+const puppeteer = require('puppeteer-core');
 
 module.exports = async (req, res) => {
-    // 1. Configurações
+    // Configurações de Segurança da API
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -15,104 +14,84 @@ module.exports = async (req, res) => {
     const { renavam } = req.body;
     if (!renavam) return res.status(400).json({ erro: 'Renavam vazio.' });
 
+    let browser = null;
+
     try {
+        // 1. Inicia o Navegador Invisível (Chrome)
+        // Usa configurações especiais para rodar rápido na Vercel
+        browser = await puppeteer.launch({
+            args: chromium.args,
+            defaultViewport: chromium.defaultViewport,
+            executablePath: await chromium.executablePath(),
+            headless: chromium.headless,
+            ignoreHTTPSErrors: true
+        });
+
+        const page = await browser.newPage();
+        
+        // 2. Acessa a página (Portaria)
         const urlHome = 'https://www.contribuinte.fazenda.pr.gov.br/ipva/faces/home';
+        await page.goto(urlHome, { waitUntil: 'networkidle2' });
+
+        // SEUS IDs DESCOBERTOS
+        const idInputRenavam = '#pt1\\:r1\\:0\\:r2\\:0\\:ig1\\:it1\\:\\:content'; // Ajustado para seletor CSS
+        const idBotaoConsultar = '#pt1\\:r1\\:0\\:r2\\:0\\:ig1\\:b1'; // Ajustado para seletor CSS
+
+        // 3. Digita o Renavam
+        // Espera o campo aparecer na tela
+        await page.waitForSelector(idInputRenavam, { timeout: 10000 });
+        await page.type(idInputRenavam, renavam);
+
+        // 4. Clica no Botão e Espera Navegar
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }), // Espera a página mudar
+            page.click(idBotaoConsultar) // Clica
+        ]);
+
+        // 5. Coleta os Dados da Nova Página
+        // Verifica se achou o proprietário
+        const proprietarioEl = await page.$('[id$=":ot2"]');
         
-        // Cliente Axios customizado para não seguir redirects automaticamente (nós faremos isso manualmente para cuidar dos cookies)
-        const client = axios.create({
-            maxRedirects: 0,
-            validateStatus: status => status >= 200 && status < 400
-        });
+        if (!proprietarioEl) {
+            // Se falhar, tira um "print" do texto da tela para sabermos o erro
+            const textoTela = await page.evaluate(() => document.body.innerText.substring(0, 200));
+            throw new Error(`Não encontrei os dados na tela final. Texto visível: ${textoTela}`);
+        }
 
-        // --- PASSO 1: Pegar o Crachá (Cookies) na Home ---
-        const page = await client.get(urlHome);
-        let cookies = page.headers['set-cookie'] || [];
-        
-        const $ = cheerio.load(page.data);
-        const viewState = $('input[name="javax.faces.ViewState"]').val();
-
-        // SEUS IDs CORRETOS (CONFIRMADOS NAS FOTOS)
-        const idInput = 'pt1:r1:0:r2:0:ig1:it1';
-        const idBotao = 'pt1:r1:0:r2:0:ig1:b1';
-
-        // --- PASSO 2: Enviar a Consulta ---
-        const form = {
-            'org.apache.myfaces.trinidad.faces.FORM': 'f1',
-            'javax.faces.ViewState': viewState,
-            'source': idBotao,
-            'event': idBotao,
-            [idInput]: renavam
+        // Função interna para pegar texto limpo
+        const extrair = async (idFinal) => {
+            return await page.evaluate((final) => {
+                const el = document.querySelector(`[id$="${final}"]`);
+                return el ? el.innerText : '';
+            }, idFinal);
         };
-
-        // Prepara os cookies para envio
-        const cookieStr = cookies.map(c => c.split(';')[0]).join('; ');
-
-        const postResult = await client.post(urlHome, qs.stringify(form), {
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Cookie': cookieStr,
-                'Origin': 'https://www.contribuinte.fazenda.pr.gov.br',
-                'Referer': urlHome
-            }
-        });
-
-        // --- PASSO 3: O Pulo do Gato (Entrar na Sala Nova) ---
-        let htmlFinal = postResult.data;
-        
-        // Se o Detran respondeu com "Vá para tal lugar" (Redirect 302 ou 303)
-        if (postResult.status === 302 || postResult.status === 303 || postResult.headers.location) {
-            const novaUrl = postResult.headers.location;
-            
-            // Atualiza cookies se vierem novos
-            if (postResult.headers['set-cookie']) {
-                cookies = [...cookies, ...postResult.headers['set-cookie']];
-            }
-            const cookieStrFinal = cookies.map(c => c.split(';')[0]).join('; ');
-
-            // Segue para a nova página
-            const pageFinal = await client.get(novaUrl, {
-                headers: {
-                    'Cookie': cookieStrFinal,
-                    'Referer': urlHome
-                }
-            });
-            htmlFinal = pageFinal.data;
-        }
-
-        // --- PASSO 4: Ler os Resultados ---
-        const $res = cheerio.load(htmlFinal);
-        const clean = (sel) => $res(sel).text().replace(/CDATA\[|\]\]/g, '').trim();
-
-        const proprietario = clean('[id$=":ot2"]');
-
-        if (!proprietario) {
-            // AGORA O ERRO VAI APARECER COMPLETO
-            // Eu juntei o texto técnico na mensagem principal para o pop-up mostrar
-            const titulo = $res('title').text();
-            const textoPagina = $res('body').text().replace(/\s+/g, ' ').substring(0, 150);
-            
-            return res.status(404).json({
-                erro: `ERRO TÉCNICO: Título da pág: "${titulo}". Texto visível: "${textoPagina}". IDs usados: ${idInput} / ${idBotao}`
-            });
-        }
 
         const dados = {
-            proprietario: proprietario,
-            renavam: clean('[id$=":ot6"]'),
-            placa: clean('[id$=":ot8"]'),
-            modelo: clean('[id$=":ot10"]'),
-            ano: clean('[id$=":ot12"]'),
+            proprietario: await extrair(':ot2'),
+            renavam: await extrair(':ot6'),
+            placa: await extrair(':ot8'),
+            modelo: await extrair(':ot10'),
+            ano: await extrair(':ot12'),
             debitos: []
         };
-        
-        $res('span').each((i, el) => {
-            const t = $(el).text();
-            if (t.includes('R$')) dados.debitos.push(t.replace(/CDATA\[|\]\]/g, '').trim());
-        });
 
+        // Pega os valores em R$
+        const valores = await page.evaluate(() => {
+            const spans = Array.from(document.querySelectorAll('span'));
+            return spans
+                .map(s => s.innerText)
+                .filter(t => t.includes('R$'));
+        });
+        dados.debitos = valores;
+
+        await browser.close();
         res.json(dados);
 
-    } catch (e) {
-        res.status(500).json({ erro: 'FALHA CRÍTICA: ' + e.message });
+    } catch (error) {
+        if (browser) await browser.close();
+        console.error(error);
+        res.status(500).json({ 
+            erro: 'Erro no Robô: ' + error.message 
+        });
     }
 };
