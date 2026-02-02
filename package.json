@@ -1,10 +1,10 @@
 {
   "name": "consulta-detran-pr",
   "version": "1.0.0",
-  "description": "API Detran PR Versao Final 2026",
+  "description": "API Detran PR Download Remoto",
   "main": "api/consulta.js",
   "dependencies": {
-    "puppeteer-core": "^24.0.0",
-    "@sparticuz/chromium": "^131.0.1"
+    "puppeteer-core": "^22.6.0",
+    "@sparticuz/chromium": "^123.0.1"
   }
 }
