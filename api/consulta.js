@@ -1,72 +1,67 @@
-/* ARQUIVO: api/consulta.js (VERSÃO ROBUSTA - LEITURA INTELIGENTE) */
+/* ARQUIVO: api/consulta.js (VERSÃO SNIPER - IDs PRECISOS) */
 const axios = require('axios');
 const cheerio = require('cheerio');
 const qs = require('qs');
 
 module.exports = async (req, res) => {
-    // Headers de segurança para permitir o acesso do seu site
+    // 1. Configurações de Segurança
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-    if (req.method === 'OPTIONS') {
-        res.status(200).end();
-        return;
-    }
+    if (req.method === 'OPTIONS') return res.status(200).end();
 
     const { renavam } = req.body;
-
-    if (!renavam) {
-        return res.status(400).json({ erro: 'Renavam vazio.' });
-    }
+    if (!renavam) return res.status(400).json({ erro: 'Renavam vazio.' });
 
     try {
-        const urlBase = 'https://www.contribuinte.fazenda.pr.gov.br/ipva/faces';
-        const urlAlvo = `${urlBase}/consultar-debitos-detalhes`;
+        const urlAlvo = 'https://www.contribuinte.fazenda.pr.gov.br/ipva/faces/consultar-debitos-detalhes';
 
-        // 1. Acessa a página inicial para iniciar a sessão
-        const responsePagina = await axios.get(urlAlvo);
+        // --- FASE 1: Reconhecimento (GET) ---
+        const page = await axios.get(urlAlvo);
+        const html = page.data;
         
-        // Pega os cookies de sessão
-        const cookies = responsePagina.headers['set-cookie'];
+        // Pega Cookies (Crachá)
+        const cookies = page.headers['set-cookie'];
         const cookieHeader = cookies ? cookies.map(c => c.split(';')[0]).join('; ') : '';
 
-        // Carrega o HTML para achar os botões
-        const $ = cheerio.load(responsePagina.data);
+        // Pega ViewState (Mapa da sessão)
+        const $ = cheerio.load(html);
         const viewState = $('input[name="javax.faces.ViewState"]').val();
 
-        // Tenta achar o ID do botão de Consultar
-        // Procura por qualquer botão que tenha texto "Consultar" ou similar
+        // --- TÉCNICA SNIPER: Achar os IDs exatos ---
+        // Procuramos no HTML bruto onde está escrito "Consultar" e pegamos o ID do botão pai
+        // Exemplo no HTML: <button id="pt1:r1:0:cb1">Consultar</button>
         let idBotao = '';
-        $('button, a').each((i, el) => {
-            const txt = $(el).text().toLowerCase();
-            if (txt.includes('consultar') || txt.includes('pesquisar')) {
-                idBotao = $(el).attr('id');
-            }
-        });
+        const regexBotao = /id="([^"]+)"[^>]*>[^<]*Consultar/i;
+        const matchBotao = html.match(regexBotao);
         
-        // Tenta achar o ID do campo Renavam
-        let idCampo = '';
-        $('label').each((i, el) => {
-            if ($(el).text().includes('Renavam')) {
-                idCampo = $(el).attr('for');
-            }
-        });
+        if (matchBotao) {
+            idBotao = matchBotao[1]; // Achou o ID exato!
+        } else {
+            // Se não achar, tenta os IDs comuns do Detran-PR que mudam pouco
+            idBotao = 'pt1:r1:0:cb1'; // Chute educado 1
+            if (html.includes('pt1:r1:0:b2')) idBotao = 'pt1:r1:0:b2'; // Chute educado 2
+        }
 
-        // Fallbacks (se não achar, tenta os padrões conhecidos)
-        if (!idBotao) idBotao = 'pt1:r1:0:b1';
-        if (!idCampo) idCampo = 'pt1:r1:0:it1';
+        // Procura o ID do campo Renavam (Input)
+        // Geralmente está perto do Label "Renavam"
+        let idInputRenavam = 'pt1:r1:0:it1'; // Padrão mais comum
+        // Tenta achar labels 'for="X"'
+        const regexLabel = /for="([^"]+)"[^>]*>\s*\*? ?Renavam/i;
+        const matchLabel = html.match(regexLabel);
+        if (matchLabel) idInputRenavam = matchLabel[1];
 
-        // 2. Envia os dados (Simula o clique)
+        // --- FASE 2: O Disparo (POST) ---
         const form = {
             'org.apache.myfaces.trinidad.faces.FORM': 'f1',
             'javax.faces.ViewState': viewState,
-            'event': idBotao,
-            [idCampo]: renavam
+            'event': idBotao, // O segredo está aqui: clicar no botão certo
+            [idInputRenavam]: renavam
         };
 
-        const responsePost = await axios.post(urlAlvo, qs.stringify(form), {
+        const result = await axios.post(urlAlvo, qs.stringify(form), {
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Cookie': cookieHeader,
@@ -75,80 +70,51 @@ module.exports = async (req, res) => {
             }
         });
 
-        // 3. LEITURA INTELIGENTE (SEM DEPENDER DE IDs)
-        // Transformamos tudo em texto e procuramos os padrões visuais
-        const corpoResposta = responsePost.data;
-        const $res = cheerio.load(corpoResposta);
-        const textoCompleto = $res.text(); // Pega todo o texto da página limpo
+        // --- FASE 3: A Coleta (Parser) ---
+        const $res = cheerio.load(result.data);
+        const rawText = $res.text(); // Texto puro da página de resposta
 
-        // Função auxiliar para extrair dados usando "Labels" vizinhos
-        // Procura o elemento que contem o Label e pega o próximo Span com valor
-        const extrairPorLabel = (label) => {
-            let valor = 'Não encontrado';
-            // Procura spans que contenham o nome do campo (ex: "Proprietário")
-            $res('span').each((i, el) => {
-                if ($(el).text().includes(label)) {
-                    // Tenta pegar o valor navegando na estrutura da tabela do Detran
-                    // Geralmente: Label -> Pai -> Pai -> Próximo TD/Div -> Filho -> Span Valor
-                    // Estrutura do XML: <td><div><span>Label</span></div></td> <td><div><span>VALOR</span></div></td>
-                    const valorProvavel = $(el).parent().parent().parent().find('td').eq(1).find('span').text();
-                    if (valorProvavel && valorProvavel.trim() !== '') {
-                        valor = valorProvavel;
-                    } else {
-                         // Tentativa 2: Busca genérica por proximidade
-                         const proximo = $(el).closest('td').next('td').text();
-                         if(proximo) valor = proximo;
-                    }
-                }
-            });
-            // Limpeza final (remove CDATA e sujeira do XML)
-            return valor.replace('CDATA[', '').replace(']]', '').trim();
+        // Verifica se continuamos na página de pesquisa (Erro de clique)
+        if (rawText.includes('Consultar Débitos e Guias')) {
+             // Se a página de resposta ainda tem o título de busca, o clique falhou.
+             // Mas vamos tentar ler mesmo assim, vai que os dados apareceram embaixo.
+        }
+
+        // Função para pescar dados específicos
+        const extrair = (idParcial) => {
+            // Procura elementos que terminam com o ID (ex: :ot2)
+            const el = $res(`[id$="${idParcial}"]`); 
+            return el.length ? el.text().trim() : '';
         };
 
-        // Extração Manual baseada no seu XML de exemplo
-        // Se a busca inteligente falhar, tentamos regex direto no HTML bruto
-        const extrairRegex = (texto, chave) => {
-            // Procura algo como: <span ...>Proprietário</span> ... <span ...>NOME</span>
-            // Essa regex é genérica para tentar achar o valor após o label
-            try {
-                const regex = new RegExp(`${chave}<\\/span>.*?<span.*?>(.*?)<\\/span>`, 's');
-                const match = texto.match(regex);
-                return match ? match[1].replace('CDATA[', '').replace(']]', '').trim() : '';
-            } catch (e) { return ''; }
-        };
-
-        // Monta o objeto final misturando as técnicas
-        const resultado = {
-            proprietario: extrairPorLabel('Proprietário') || extrairRegex(corpoResposta, 'Proprietário'),
-            renavam: extrairPorLabel('Renavam') || extrairRegex(corpoResposta, 'Renavam'),
-            placa: extrairPorLabel('Placa') || extrairRegex(corpoResposta, 'Placa'),
-            modelo: extrairPorLabel('Modelo') || extrairRegex(corpoResposta, 'Modelo'),
-            ano: extrairPorLabel('Fabricação') || extrairRegex(corpoResposta, 'Fabricação'),
+        // Dados baseados nos seus prints (ot2=Proprietario, ot6=Renavam, ot8=Placa)
+        const dados = {
+            proprietario: extrair(':ot2'),
+            renavam: extrair(':ot6'),
+            placa: extrair(':ot8'),
+            modelo: extrair(':ot10'),
+            ano: extrair(':ot12'),
             debitos: []
         };
 
-        // Busca valores financeiros (R$)
-        // Varre todos os spans procurando cifrão
+        // Captura de valores (R$)
         $res('span').each((i, el) => {
-            const t = $(el).text();
-            if (t.includes('R$')) {
-                resultado.debitos.push(t.replace('CDATA[', '').replace(']]', '').trim());
-            }
+            const txt = $(el).text();
+            if (txt.includes('R$')) dados.debitos.push(txt);
         });
 
-        // 4. TRAVA DE SEGURANÇA
-        // Se mesmo com a leitura inteligente não acharmos o Proprietário ou a Placa,
-        // então o Renavam realmente não existe ou o site bloqueou.
-        if (!resultado.proprietario || resultado.proprietario === 'Não encontrado' || resultado.proprietario.length < 3) {
-             return res.status(404).json({ 
-                erro: 'Veículo não localizado. Confira o Renavam.' 
+        // --- TRAVA DE SEGURANÇA FINAL ---
+        // Se não achou proprietário, é porque falhou
+        if (!dados.proprietario || dados.proprietario === '') {
+            return res.status(404).json({ 
+                erro: 'Veículo não encontrado.',
+                debug: `Botão usado: ${idBotao}, Input usado: ${idInputRenavam}`
             });
         }
 
-        res.json(resultado);
+        res.json(dados);
 
     } catch (e) {
-        console.log(e);
-        res.status(500).json({ erro: 'Erro interno ao consultar.' });
+        res.status(500).json({ erro: 'Erro interno.' });
     }
 };
