@@ -1,4 +1,4 @@
-/* ARQUIVO: api/consulta.js (VERSÃO REVELADORA) */
+/* ARQUIVO: api/consulta.js (VERSÃO RASTREADOR UNIVERSAL) */
 const axios = require('axios');
 const cheerio = require('cheerio');
 const qs = require('qs');
@@ -27,39 +27,53 @@ module.exports = async (req, res) => {
         const cookieHeader = cookies ? cookies.map(c => c.split(';')[0]).join('; ') : '';
         const viewState = $('input[name="javax.faces.ViewState"]').val();
 
-        // 2. SONDA DE BOTOES (Modo Detetive)
-        let idInput = $('label').filter((i, el) => $(el).text().includes('Renavam')).attr('for');
-        if (!idInput) idInput = 'pt1:r1:0:it1'; 
+        // 2. RASTREADOR UNIVERSAL DE IDs
+        // Procura o ID do campo Renavam
+        let idInputRenavam = '';
+        // Estratégia 1: Label for
+        $('label').each((i, el) => {
+            if ($(el).text().includes('Renavam')) idInputRenavam = $(el).attr('for');
+        });
+        // Estratégia 2: Input próximo a texto Renavam
+        if (!idInputRenavam) {
+             idInputRenavam = $('tr:contains("Renavam") input').attr('id') || 'pt1:r1:0:it1';
+        }
 
-        let listaBotoes = [];
+        // Procura o ID do Botão Consultar
         let idBotaoConsultar = '';
-
-        // Varre TUDO que pode ser botão
+        
+        // Varre TODOS os elementos da página procurando "Consultar"
         $('*').each((i, el) => {
+            // Ignora scripts e estilos
+            if (el.tagName === 'script' || el.tagName === 'style') return;
+
+            const texto = $(el).text() || $(el).attr('value') || $(el).attr('title') || '';
             const id = $(el).attr('id');
-            const texto = $(el).text() ? $(el).text().trim().substring(0, 20) : ''; // Pega só o começo do texto
-            
-            // Se tiver ID e parecer um botão ou link
-            if (id && (el.tagName === 'button' || el.tagName === 'a' || $(el).attr('role') === 'button' || $(el).attr('class')?.includes('btn'))) {
-                // Guarda na lista para te mostrar
-                if (texto) listaBotoes.push(`[${id} = ${texto}]`);
-                
-                // Tenta achar o certo
-                if (texto.toLowerCase().includes('consultar') || texto.toLowerCase().includes('pesquisar')) {
-                    idBotaoConsultar = id;
+
+            // Se o elemento tem ID e tem a palavra mágica
+            if (id && (texto.includes('Consultar') || texto.includes('Pesquisar'))) {
+                // Preferência para inputs e buttons
+                if (el.tagName === 'input' || el.tagName === 'button' || el.tagName === 'a') {
+                     idBotaoConsultar = id;
                 }
             }
         });
 
-        // Se não achou pelo nome, tenta o padrão
+        // Se o rastreador falhar, usa o "chute" mais provável (baseado na estrutura ADF)
+        // ADF costuma usar cb1 ou cb2 (CommandButton)
         if (!idBotaoConsultar) idBotaoConsultar = 'pt1:r1:0:cb1';
+        
+        // --- LOG DE DEBUG PARA VOCÊ (CASO FALHE) ---
+        // Se ainda assim der erro, vamos saber exatamente o que o rastreador achou
+        const debugInfo = `Botão achado: ${idBotaoConsultar} | Input achado: ${idInputRenavam}`;
 
-        // 3. Tenta consultar
+        // 3. Disparo
         const form = {
             'org.apache.myfaces.trinidad.faces.FORM': 'f1',
             'javax.faces.ViewState': viewState,
+            'source': idBotaoConsultar, 
             'event': idBotaoConsultar, 
-            [idInput]: renavam
+            [idInputRenavam]: renavam
         };
 
         const result = await axios.post(urlAlvo, qs.stringify(form), {
@@ -71,25 +85,29 @@ module.exports = async (req, res) => {
             }
         });
 
-        // 4. Verifica o resultado
+        // 4. Extração dos dados
         const $res = cheerio.load(result.data);
-        const proprietario = $res(`[id$=":ot2"]`).text().replace(/CDATA\[|\]\]/g, '').trim();
+        
+        // Função auxiliar de limpeza
+        const clean = (sel) => $res(sel).text().replace(/CDATA\[|\]\]/g, '').trim();
 
-        // SE FALHAR, MOSTRA O MAPA DO TESOURO
+        // Tenta pegar pelo ID final (ot2, ot6, etc)
+        // O $ é um seletor de "termina com"
+        const proprietario = clean('[id$=":ot2"]');
+
         if (!proprietario) {
-            // Aqui eu coloco a lista DENTRO da mensagem de erro para aparecer no seu pop-up
             return res.status(404).json({
-                erro: `ERRO DE CLIQUE! ME ENVIE ISSO: Botão tentado: ${idBotaoConsultar}. Botoes na tela: ${listaBotoes.join(' | ')}`
+                erro: 'Não achei os dados. O rastreador usou estes IDs:',
+                pista: debugInfo
             });
         }
 
-        // Se der certo (milagre), retorna os dados
         const dados = {
             proprietario: proprietario,
-            renavam: $res(`[id$=":ot6"]`).text().replace(/CDATA\[|\]\]/g, '').trim(),
-            placa: $res(`[id$=":ot8"]`).text().replace(/CDATA\[|\]\]/g, '').trim(),
-            modelo: $res(`[id$=":ot10"]`).text().replace(/CDATA\[|\]\]/g, '').trim(),
-            ano: $res(`[id$=":ot12"]`).text().replace(/CDATA\[|\]\]/g, '').trim(),
+            renavam: clean('[id$=":ot6"]'),
+            placa: clean('[id$=":ot8"]'),
+            modelo: clean('[id$=":ot10"]'),
+            ano: clean('[id$=":ot12"]'),
             debitos: []
         };
         
@@ -101,6 +119,6 @@ module.exports = async (req, res) => {
         res.json(dados);
 
     } catch (e) {
-        res.status(500).json({ erro: 'Erro Crítico: ' + e.message });
+        res.status(500).json({ erro: 'Erro interno: ' + e.message });
     }
 };
