@@ -1,9 +1,9 @@
-/* ARQUIVO: api/consulta.js (VERSÃO PARAQUEDAS - DOWNLOAD REMOTO) */
+/* ARQUIVO: api/consulta.js (VERSÃO NODE 18 - ESTÁVEL) */
 const chromium = require('@sparticuz/chromium');
 const puppeteer = require('puppeteer-core');
 
 module.exports = async (req, res) => {
-    // Configurações de Segurança
+    // Configurações de CORS
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -17,74 +17,63 @@ module.exports = async (req, res) => {
     let browser = null;
 
     try {
-        // --- CONFIGURAÇÃO DE DOWNLOAD REMOTO (A SOLUÇÃO DO LIBNSS3) ---
-        // Aqui nós forçamos ele a baixar um Chrome específico que funciona no Linux da Vercel
-        const linkDoChrome = "https://github.com/Sparticuz/chromium/releases/download/v123.0.1/chromium-v123.0.1-pack.tar";
-        
+        // CONFIGURAÇÃO CLÁSSICA PARA NODE 18
         browser = await puppeteer.launch({
-            args: [...chromium.args, '--hide-scrollbars', '--disable-web-security', '--no-sandbox'],
+            args: chromium.args,
             defaultViewport: chromium.defaultViewport,
-            // O Segredo: Passamos o link para ele baixar na hora
-            executablePath: await chromium.executablePath(linkDoChrome),
+            executablePath: await chromium.executablePath(),
             headless: chromium.headless,
             ignoreHTTPSErrors: true
         });
 
         const page = await browser.newPage();
         
-        // 2. Entra no site
-        const urlHome = 'https://www.contribuinte.fazenda.pr.gov.br/ipva/faces/home';
-        await page.goto(urlHome, { waitUntil: 'networkidle2', timeout: 30000 });
+        // Entra no site
+        await page.goto('https://www.contribuinte.fazenda.pr.gov.br/ipva/faces/home', { 
+            waitUntil: 'networkidle2', 
+            timeout: 20000 
+        });
 
-        // 3. Digita o Renavam (SELETOR DO SEU CÓDIGO LOCAL)
+        // Digita Renavam
         const inputRenavam = 'input[id*="ig1:it1::content"]'; 
-        await page.waitForSelector(inputRenavam, { timeout: 15000 });
+        await page.waitForSelector(inputRenavam, { timeout: 10000 });
         await page.type(inputRenavam, renavam);
 
-        // 4. Clica no botão Consultar (SELETOR DO SEU CÓDIGO LOCAL)
-        // O seu código local usava "ig1:b11", vamos priorizar ele
+        // Clica em Consultar
         let botaoConsultar = 'div[id*="ig1:b11"]';
+        if ((await page.$(botaoConsultar)) === null) botaoConsultar = 'div[id*="ig1:b1"]';
         
-        // Se não achar o b11, tenta o b1
-        if ((await page.$(botaoConsultar)) === null) {
-             botaoConsultar = 'div[id*="ig1:b1"]';
-        }
-        
-        // Clique via Javascript (mais seguro contra falhas de renderização)
-        await page.evaluate((btnSelector) => {
-            const btn = document.querySelector(btnSelector);
-            if (btn) btn.click();
-        }, botaoConsultar);
+        await Promise.all([
+            new Promise(r => setTimeout(r, 500)), // Pequeno respiro
+            page.click(botaoConsultar)
+        ]);
 
-        // 5. ESPERA INTELIGENTE
-        // Espera o nome do proprietário aparecer
+        // Espera resultado
         try {
             await page.waitForFunction(
                 () => {
                     const el = document.querySelector('span[id*="ot2"]');
                     return el && el.innerText.length > 3;
                 },
-                { timeout: 25000 } 
+                { timeout: 20000 } 
             );
         } catch (e) {
-            // Se der erro, tira print do texto da tela
-            const textoTela = await page.evaluate(() => document.body.innerText.substring(0, 400));
-            throw new Error(`Tempo esgotado. Texto na tela: ${textoTela}`);
+            const textoTela = await page.evaluate(() => document.body.innerText.substring(0, 300));
+            throw new Error(`Erro: Site não carregou os dados. Texto visível: ${textoTela}`);
         }
 
-        // 6. Raspa os dados
+        // Pega dados
         const dados = await page.evaluate(() => {
             const pegarTexto = (parteDoId) => {
                 const el = document.querySelector(`span[id*="${parteDoId}"]`);
-                return el ? el.innerText : "Não encontrado";
+                return el ? el.innerText : "N/A";
             };
-
             return {
                 proprietario: pegarTexto('ot2'),    
                 renavam: pegarTexto('ot6'),         
-                placa: pegarTexto('ot8'),           
-                modelo: pegarTexto('ot10'),         
-                ano: pegarTexto('ot12'),            
+                placa: pegarTexto('ot8'),
+                modelo: pegarTexto('ot10'),
+                ano: pegarTexto('ot12'),
                 debitos: []
             };
         });
@@ -102,8 +91,6 @@ module.exports = async (req, res) => {
     } catch (error) {
         if (browser) await browser.close();
         console.error(error);
-        res.status(500).json({ 
-            erro: 'Erro no Robô: ' + error.message 
-        });
+        res.status(500).json({ erro: error.message });
     }
 };
