@@ -1,8 +1,7 @@
-/* ARQUIVO: api/consulta.js (VERSÃO FINAL - DIGITAÇÃO HUMANA) */
+/* ARQUIVO: api/consulta.js (VERSÃO CAÇADOR - BUSCA POR TEXTO) */
 const puppeteer = require('puppeteer-core');
 
 module.exports = async (req, res) => {
-    // 1. Configurações de Segurança
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -16,10 +15,10 @@ module.exports = async (req, res) => {
     let browser = null;
 
     try {
-        // 2. CONEXÃO BROWSERLESS
+        // 1. CONEXÃO (Sua chave já está aqui)
         const MINHA_CHAVE = '2TuHdl0Zj5Tj5PP1fa3eec3f1e757ededf8f76377a5ba7385'; 
+        console.log("🚀 Caçador Iniciado...");
         
-        console.log("🚀 Iniciando (Modo Humano)...");
         browser = await puppeteer.connect({
             browserWSEndpoint: `wss://chrome.browserless.io?token=${MINHA_CHAVE}&stealth`
         });
@@ -27,83 +26,96 @@ module.exports = async (req, res) => {
         const page = await browser.newPage();
         await page.setViewport({ width: 1366, height: 768 });
 
-        // 3. Entra no site
+        // 2. Navegação
         await page.goto('https://www.contribuinte.fazenda.pr.gov.br/ipva/faces/home', { 
-            waitUntil: 'networkidle2', 
-            timeout: 60000 
+            waitUntil: 'networkidle2', timeout: 60000 
         });
 
-        // 4. INTERAÇÃO LENTA (Para acordar o Oracle ADF)
-        const seletorInput = 'input[id*="it1::content"]'; 
-        const seletorBotao = 'div[id*="b11"]';
-
+        // 3. ESTRATÉGIA CAÇADOR: Encontrar input pelo ID genérico (mais seguro)
+        // O seletor local era "input[id*="ig1:it1::content"]"
+        const seletorInput = 'input[id*="it1::content"]';
         await page.waitForSelector(seletorInput, { timeout: 20000 });
 
-        // A. Clica e foca no campo
+        // Digita devagar
         await page.click(seletorInput);
-        await new Promise(r => setTimeout(r, 500)); // Espera o campo "acordar"
-
-        // B. Digita devagar (100ms entre cada tecla) - Isso ativa a validação do site
+        await new Promise(r => setTimeout(r, 300));
         await page.type(seletorInput, renavam, { delay: 150 });
+        await page.keyboard.press('Tab'); // Valida o campo
         
-        // C. Aperta TAB para sair do campo (Obrigatório no Detran para validar o número)
-        await page.keyboard.press('Tab');
-        await new Promise(r => setTimeout(r, 1000)); // Espera o site validar
-
-        // D. Clica no botão Consultar (Tenta via mouse e via código pra garantir)
-        let botaoEncontrado = await page.$(seletorBotao);
-        if(!botaoEncontrado) {
-             // Tenta seletor alternativo se o principal falhar
-             seletorBotao = 'div[id*="b1"]'; 
+        // --- VERIFICAÇÃO DE SEGURANÇA ---
+        // O robô lê o campo para ver se o número entrou mesmo
+        const valorDigitado = await page.$eval(seletorInput, el => el.value);
+        if (valorDigitado !== renavam) {
+            // Se falhou, tenta forçar via Javascript (Plano B)
+            await page.evaluate((sel, val) => { document.querySelector(sel).value = val; }, seletorInput, renavam);
         }
 
-        await page.evaluate((btnSel) => {
-            const b = document.querySelector(btnSel);
-            if(b) b.click();
-        }, seletorBotao);
+        // 4. CLIQUE PELO TEXTO (Caça o botão escrito "CONSULTAR")
+        // Isso resolve o problema de ID errado ou botão escondido
+        console.log("🔎 Procurando botão 'CONSULTAR'...");
+        const clicou = await page.evaluate(() => {
+            // Pega todos os botões e divs da tela
+            const elementos = Array.from(document.querySelectorAll('div, button, a, span'));
+            // Acha aquele que tem o texto exato
+            const botao = elementos.find(el => el.innerText && el.innerText.toUpperCase().trim() === 'CONSULTAR');
+            if (botao) {
+                botao.click();
+                return true;
+            }
+            return false;
+        });
+
+        if (!clicou) {
+            // Se não achou pelo texto, tenta pelo ID antigo (Plano C)
+            const btnBackup = 'div[id*="b11"]';
+            if (await page.$(btnBackup)) await page.click(btnBackup);
+        }
 
         // 5. ESPERA RESULTADO
         try {
             await page.waitForFunction(
                 () => {
-                    const nome = document.querySelector('span[id*="ot2"]');
-                    const erro = document.querySelector('.ui-messages-error-summary');
-                    return (nome && nome.innerText.length > 2) || erro;
+                    const proprietario = document.querySelector('span[id*="ot2"]');
+                    const erro = document.querySelector('.ui-messages-error-summary'); // Msg de erro do site
+                    return (proprietario && proprietario.innerText.length > 2) || erro;
                 },
-                { timeout: 45000 } // Tempo generoso
+                { timeout: 40000 } 
             );
         } catch (e) {
-            const textoTela = await page.evaluate(() => document.body.innerText.substring(0, 500));
-            throw new Error(`Detran não carregou. Tela parou em: ${textoTela}`);
+            // Se der erro, me mostra o que tem na tela (ex: "Renavam não encontrado" ou só a Home)
+            const textoTela = await page.evaluate(() => document.body.innerText.substring(0, 400));
+            throw new Error(`Não carregou. O robô digitou "${valorDigitado}" e a tela parou em: ${textoTela}`);
         }
 
-        // 6. VERIFICA ERROS DO DETRAN
-        const erroDetran = await page.evaluate(() => {
+        // 6. RASPA DADOS
+        // Primeiro, vê se o Detran deu mensagem de erro (ex: Renavam não existe)
+        const msgErroDetran = await page.evaluate(() => {
             const el = document.querySelector('.ui-messages-error-summary');
             return el ? el.innerText : null;
         });
 
-        if (erroDetran) {
+        if (msgErroDetran) {
             await browser.close();
-            return res.json({ proprietario: "Mensagem do Detran: " + erroDetran });
+            return res.json({ proprietario: "DETRAN RESPONDEU: " + msgErroDetran });
         }
 
-        // 7. RASPA DADOS
+        // Se passou, pega os dados
         const dados = await page.evaluate(() => {
-            const pegarTexto = (parteDoId) => {
-                const el = document.querySelector(`span[id*="${parteDoId}"]`);
+            const pegar = (id) => {
+                const el = document.querySelector(`span[id*="${id}"]`);
                 return el ? el.innerText : "N/A";
             };
             return {
-                proprietario: pegarTexto('ot2'),    
-                renavam: pegarTexto('ot6'),         
-                placa: pegarTexto('ot8'),
-                modelo: pegarTexto('ot10'),
-                ano: pegarTexto('ot12'),
+                proprietario: pegar('ot2'),    
+                renavam: pegar('ot6'),         
+                placa: pegar('ot8'),
+                modelo: pegar('ot10'),
+                ano: pegar('ot12'),
                 debitos: []
             };
         });
 
+        // Pega valores
         const valores = await page.evaluate(() => {
             return Array.from(document.querySelectorAll('span'))
                 .map(s => s.innerText)
@@ -117,6 +129,6 @@ module.exports = async (req, res) => {
     } catch (error) {
         if (browser) await browser.close();
         console.error(error);
-        res.status(500).json({ erro: 'Falha Técnica: ' + error.message });
+        res.status(500).json({ erro: error.message });
     }
 };
