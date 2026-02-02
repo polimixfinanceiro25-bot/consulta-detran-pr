@@ -1,8 +1,8 @@
-/* ARQUIVO: api/consulta.js (VERSÃO FINAL - METRALHADORA DE CLIQUES) */
+/* ARQUIVO: api/consulta.js (CORREÇÃO DE SINTAXE) */
 const puppeteer = require('puppeteer-core');
 
 module.exports = async (req, res) => {
-    // Configurações padrão
+    // Configurações
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -18,7 +18,7 @@ module.exports = async (req, res) => {
     try {
         const MINHA_CHAVE = '2TuHdl0Zj5Tj5PP1fa3eec3f1e757ededf8f76377a5ba7385'; 
         
-        console.log("🚀 Iniciando Operação Metralhadora...");
+        console.log("🚀 Iniciando (Correção $x)...");
         browser = await puppeteer.connect({
             browserWSEndpoint: `wss://chrome.browserless.io?token=${MINHA_CHAVE}&stealth`
         });
@@ -31,38 +31,40 @@ module.exports = async (req, res) => {
             waitUntil: 'networkidle2', timeout: 60000 
         });
 
-        // 2. Digita o Renavam (Sabemos que isso já funciona!)
+        // 2. Digita o Renavam
         const seletorInput = 'input[id*="it1::content"]'; 
         await page.waitForSelector(seletorInput, { timeout: 20000 });
         
         await page.click(seletorInput);
         await new Promise(r => setTimeout(r, 500));
         await page.type(seletorInput, renavam, { delay: 100 });
-        await page.keyboard.press('Tab'); // Valida o campo
+        await page.keyboard.press('Tab'); 
         await new Promise(r => setTimeout(r, 500));
 
-        // 3. A METRALHADORA DE CLIQUES (Tenta tudo para enviar)
-        console.log("🔫 Tentando enviar de todas as formas...");
+        // 3. METRALHADORA (Comando Corrigido)
+        console.log("🔫 Tentando enviar...");
 
-        // TENTATIVA A: Apertar ENTER (Geralmente infalível)
+        // A: ENTER
         await page.keyboard.press('Enter');
         await new Promise(r => setTimeout(r, 1000));
 
-        // TENTATIVA B: Clicar no botão pelo ID (Original)
+        // B: Busca Textual via JavaScript Puro (Substitui o $x que deu erro)
+        await page.evaluate(() => {
+            // Procura qualquer coisa que pareça um botão e tenha "Consultar" escrito
+            const elementos = document.querySelectorAll('div, a, button, span');
+            for (let el of elementos) {
+                if (el.innerText && el.innerText.toUpperCase().includes('CONSULTAR')) {
+                    el.click();
+                    break; // Clica no primeiro que achar e para
+                }
+            }
+        });
+        
+        // C: ID Clássico (Segurança)
         const btnID = await page.$('div[id*="b11"]');
-        if (btnID) {
-            await btnID.click();
-            await new Promise(r => setTimeout(r, 1000));
-        }
+        if (btnID) await btnID.click();
 
-        // TENTATIVA C: Clicar pelo TEXTO exato (XPath)
-        // Procura qualquer div, span ou link que tenha a palavra "CONSULTAR"
-        const botoesTexto = await page.$x("//*[contains(text(), 'CONSULTAR') or contains(text(), 'Consultar')]");
-        if (botoesTexto.length > 0) {
-            await botoesTexto[0].click();
-        }
-
-        // 4. Espera o Resultado
+        // 4. Espera Resultado
         try {
             await page.waitForFunction(
                 () => {
@@ -74,10 +76,10 @@ module.exports = async (req, res) => {
             );
         } catch (e) {
             const textoTela = await page.evaluate(() => document.body.innerText.substring(0, 400));
-            throw new Error(`Não carregou. O robô digitou "${renavam}", tentou clicar 3x, mas a tela parou em: ${textoTela}`);
+            throw new Error(`Tela parou em: ${textoTela}`);
         }
 
-        // 5. Verifica erros do Detran
+        // 5. Verifica erros
         const msgErro = await page.evaluate(() => {
             const el = document.querySelector('.ui-messages-error-summary');
             return el ? el.innerText : null;
@@ -85,10 +87,10 @@ module.exports = async (req, res) => {
 
         if (msgErro) {
             await browser.close();
-            return res.json({ proprietario: "DETRAN RETORNOU ERRO: " + msgErro });
+            return res.json({ proprietario: "DETRAN ERRO: " + msgErro });
         }
 
-        // 6. Sucesso: Pega os dados
+        // 6. Sucesso
         const dados = await page.evaluate(() => {
             const pegar = (id) => {
                 const el = document.querySelector(`span[id*="${id}"]`);
