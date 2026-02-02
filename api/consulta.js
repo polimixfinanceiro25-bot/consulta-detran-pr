@@ -1,9 +1,9 @@
-/* ARQUIVO: api/consulta.js (VERSÃO PUPPETEER - O ROBÔ QUE USA CHROME) */
+/* ARQUIVO: api/consulta.js (SEU CÓDIGO LOCAL ADAPTADO PARA VERCEL) */
 const chromium = require('@sparticuz/chromium');
 const puppeteer = require('puppeteer-core');
 
 module.exports = async (req, res) => {
-    // Configurações de Segurança da API
+    // Configurações de Segurança (CORS)
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -11,74 +11,87 @@ module.exports = async (req, res) => {
 
     if (req.method === 'OPTIONS') return res.status(200).end();
 
-    const { renavam } = req.body;
+    const { renavam } = req.body; // Pega do POST (igual estava fazendo antes)
+
     if (!renavam) return res.status(400).json({ erro: 'Renavam vazio.' });
 
     let browser = null;
 
     try {
-        // 1. Inicia o Navegador Invisível (Chrome)
-        // Usa configurações especiais para rodar rápido na Vercel
+        // --- 1. CONFIGURAÇÃO ESPECIAL PARA VERCEL (AQUI É O PULO DO GATO) ---
+        // Em vez de launch() comum, usamos o executablePath do pacote sparticuz
         browser = await puppeteer.launch({
-            args: chromium.args,
+            args: [...chromium.args, '--no-sandbox', '--disable-setuid-sandbox'],
             defaultViewport: chromium.defaultViewport,
             executablePath: await chromium.executablePath(),
-            headless: chromium.headless,
+            headless: chromium.headless, // Na Vercel TEM que ser headless (sem tela)
             ignoreHTTPSErrors: true
         });
 
         const page = await browser.newPage();
         
-        // 2. Acessa a página (Portaria)
+        // 2. Entra no site
         const urlHome = 'https://www.contribuinte.fazenda.pr.gov.br/ipva/faces/home';
-        await page.goto(urlHome, { waitUntil: 'networkidle2' });
+        await page.goto(urlHome, { waitUntil: 'networkidle2', timeout: 20000 });
 
-        // SEUS IDs DESCOBERTOS
-        const idInputRenavam = '#pt1\\:r1\\:0\\:r2\\:0\\:ig1\\:it1\\:\\:content'; // Ajustado para seletor CSS
-        const idBotaoConsultar = '#pt1\\:r1\\:0\\:r2\\:0\\:ig1\\:b1'; // Ajustado para seletor CSS
+        // 3. Digita o Renavam (Usando o seletor DO SEU CÓDIGO LOCAL)
+        // O asterisco *= significa "contém", funciona mesmo se o ID mudar um pouco
+        const inputRenavam = 'input[id*="ig1:it1::content"]'; 
+        await page.waitForSelector(inputRenavam, { timeout: 10000 });
+        await page.type(inputRenavam, renavam);
 
-        // 3. Digita o Renavam
-        // Espera o campo aparecer na tela
-        await page.waitForSelector(idInputRenavam, { timeout: 10000 });
-        await page.type(idInputRenavam, renavam);
-
-        // 4. Clica no Botão e Espera Navegar
+        // 4. Clica no botão Consultar (Usando o seletor DO SEU CÓDIGO LOCAL)
+        // Você usou "ig1:b11" no local, mantive aqui. Adicionei fallback para b1 só por segurança.
+        let botaoConsultar = 'div[id*="ig1:b11"]';
+        const botaoExiste = await page.$(botaoConsultar);
+        if (!botaoExiste) {
+             botaoConsultar = 'div[id*="ig1:b1"]'; // Plano B
+        }
+        
+        // Clica e espera a navegação começar
         await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }), // Espera a página mudar
-            page.click(idBotaoConsultar) // Clica
+             // Pequena pausa técnica para garantir que o clique pegue
+             new Promise(r => setTimeout(r, 500)),
+             page.click(botaoConsultar)
         ]);
 
-        // 5. Coleta os Dados da Nova Página
-        // Verifica se achou o proprietário
-        const proprietarioEl = await page.$('[id$=":ot2"]');
-        
-        if (!proprietarioEl) {
-            // Se falhar, tira um "print" do texto da tela para sabermos o erro
-            const textoTela = await page.evaluate(() => document.body.innerText.substring(0, 200));
-            throw new Error(`Não encontrei os dados na tela final. Texto visível: ${textoTela}`);
+        // 5. ESPERA INTELIGENTE (Igual ao seu código, mas com timeout)
+        // Na Vercel não podemos usar timeout: 0 (infinito) senão trava o servidor.
+        // Coloquei 15 segundos. Se tiver CAPTCHA, vai dar erro aqui, pois o robô não sabe resolver.
+        try {
+            await page.waitForFunction(
+                () => {
+                    const el = document.querySelector('span[id*="ot2"]'); // Nome do proprietário
+                    return el && el.innerText.length > 3;
+                },
+                { timeout: 15000 } 
+            );
+        } catch (e) {
+            // Se der timeout, tiramos um "print" do texto para saber o porquê (pode ser captcha)
+            const textoTela = await page.evaluate(() => document.body.innerText.substring(0, 300));
+            throw new Error(`Tempo esgotado! O site pediu Captcha ou demorou. Tela: ${textoTela}`);
         }
 
-        // Função interna para pegar texto limpo
-        const extrair = async (idFinal) => {
-            return await page.evaluate((final) => {
-                const el = document.querySelector(`[id$="${final}"]`);
-                return el ? el.innerText : '';
-            }, idFinal);
-        };
+        // 6. Raspa os dados (Cópia exata da sua lógica local)
+        const dados = await page.evaluate(() => {
+            const pegarTexto = (parteDoId) => {
+                const el = document.querySelector(`span[id*="${parteDoId}"]`);
+                return el ? el.innerText : "Não encontrado";
+            };
 
-        const dados = {
-            proprietario: await extrair(':ot2'),
-            renavam: await extrair(':ot6'),
-            placa: await extrair(':ot8'),
-            modelo: await extrair(':ot10'),
-            ano: await extrair(':ot12'),
-            debitos: []
-        };
+            return {
+                proprietario: pegarTexto('ot2'),    
+                renavam: pegarTexto('ot6'),         
+                placa: pegarTexto('ot8'),           
+                modelo: pegarTexto('ot10'),         
+                ano: pegarTexto('ot12'),            
+                debitos: [] // Se quiser pegar valores, adicionamos depois
+            };
+        });
 
-        // Pega os valores em R$
+        // Pega valores financeiros
         const valores = await page.evaluate(() => {
-            const spans = Array.from(document.querySelectorAll('span'));
-            return spans
+            return Array.from(document.querySelectorAll('span'))
                 .map(s => s.innerText)
                 .filter(t => t.includes('R$'));
         });
@@ -91,7 +104,7 @@ module.exports = async (req, res) => {
         if (browser) await browser.close();
         console.error(error);
         res.status(500).json({ 
-            erro: 'Erro no Robô: ' + error.message 
+            erro: 'Erro na Consulta: ' + error.message 
         });
     }
 };
