@@ -1,12 +1,12 @@
 {
   "name": "consulta-detran-pr",
   "version": "1.0.0",
-  "description": "API Detran Node 18",
+  "description": "API Node 20 Min",
   "engines": {
-    "node": "18.x"
+    "node": "20.x"
   },
   "dependencies": {
-    "puppeteer-core": "^21.5.0",
-    "@sparticuz/chromium": "^119.0.0"
+    "puppeteer-core": "^22.0.0",
+    "@sparticuz/chromium-min": "^123.0.0"
   }
 }
