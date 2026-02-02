@@ -1,10 +1,10 @@
 {
   "name": "consulta-detran-pr",
   "version": "1.0.0",
-  "description": "API Detran PR Estavel",
+  "description": "API Detran PR Compativel",
   "main": "api/consulta.js",
   "dependencies": {
-    "puppeteer-core": "21.5.2",
-    "@sparticuz/chromium": "119.0.0"
+    "puppeteer-core": "19.7.5",
+    "@sparticuz/chromium": "112.0.2"
   }
 }
